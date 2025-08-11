@@ -4,6 +4,10 @@ A curated collection of security-flavored Proof of Concepts exploring different 
 
 > ⚠ **Disclaimer:** These PoCs are **not production-ready** — they’re here to demonstrate ideas, not to be deployed as-is.
 
+## PoC Status
+![Caffeine Intake](https://img.shields.io/badge/caffeine-over_9000-ff69b4) ![Bug Count](https://img.shields.io/badge/bugs-∞-yellowgreen) ![Project Mood](https://img.shields.io/badge/mood-hyperactive-blueviolet) ![Orchestration](https://img.shields.io/badge/AI_overlord-approved-brightgreen) ![Dependency Status](https://img.shields.io/badge/dependencies-entangled-critical) 
+
+
 ---
 
 ## What’s Inside
