@@ -11,8 +11,8 @@ A curated collection of security-flavored Proof of Concepts exploring different 
 - **PKI automation** with Terraform and Vault.
 - **JWT, OTP, and SSH certificate** experiments.
 - **Infrastructure as Code** for ephemeral, disposable labs.
-- **Tamper evident compute
-- **Multi-party compute
+- **Tamper evident** compute.
+- **Multi-party** compute.
 
 ---
 
