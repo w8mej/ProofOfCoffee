@@ -1,0 +1,53 @@
+name: Test YubiKey-Terraform API Gateway PoC
+# 🔄 CI workflow to automatically spin up a Vault dev server,
+# run Terraform against it, and validate PoC functionality.
+
+on:
+  push:
+    branches:
+      - proof-of-concept   # Only run on pushes to this branch
+  pull_request:
+    branches:
+      - proof-of-concept   # Only run on PRs targeting this branch
+
+jobs:
+  test:
+    runs-on: ubuntu-latest # Use the latest Ubuntu GitHub Actions runner
+
+    steps:
+      # 📥 Step 1: Pull the repository source code
+      - uses: actions/checkout@v4
+
+      # 🔐 Step 2: Start a Vault Dev server in Docker
+      - name: Set up Vault
+        run: |
+          docker run -d --cap-add=IPC_LOCK --name vault -p 8200:8200 vault:1.15 vault server -dev -dev-root-token-id=root
+          sleep 5  # Wait for Vault to become ready
+
+      # 📦 Step 3: Enable Vault's KV v2 secrets engine for the PoC
+      - name: Configure Vault KV
+        run: |
+          export VAULT_ADDR=http://127.0.0.1:8200
+          export VAULT_TOKEN=root
+          vault secrets enable -path=kv kv-v2
+
+      # ⚙️ Step 4: Install a specific Terraform version
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.7.5
+
+      # 🚀 Step 5: Initialize Terraform modules & providers
+      - name: Terraform Init
+        run: terraform init
+
+      # 🏗 Step 6: Apply Terraform configuration to provision resources in Vault
+      - name: Terraform Apply
+        run: terraform apply -auto-approve -var="vault_token=root"
+
+      # ✅ Step 7: Verify that the API key was created and stored in Vault
+      - name: Validate API key in Vault
+        run: |
+          export VAULT_ADDR=http://127.0.0.1:8200
+          export VAULT_TOKEN=root
+          vault kv get kv/api/keys/myapp
