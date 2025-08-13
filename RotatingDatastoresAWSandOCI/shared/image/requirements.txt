@@ -1,0 +1,33 @@
+# -----------------------------------------------------------------------------
+# Python dependencies for Multi-Cloud Credential Rotation Worker (PoC)
+# This list supports running on both AWS Lambda (container) and OCI Functions.
+#
+# SECURITY & OPS NOTES (PoC)
+# - Versions are pinned to prevent drift and supply-chain surprises.
+# - Only install what’s required for credential rotation; no unnecessary packages.
+# - In production: enable hash-pinning (pip-tools or Poetry) and scan with SCA tools.
+# -----------------------------------------------------------------------------
+
+boto3==1.34.162
+# AWS SDK for Python; used for Secrets Manager, S3, EventBridge integration.
+# Security: Ensure minimal IAM permissions for Lambda execution role.
+
+oci==2.133.0
+# Oracle Cloud Infrastructure SDK for Python; used for Vault, Object Storage, Functions auth.
+# Security: Relies on Resource Principal for OCI Functions or instance principals for compute.
+
+psycopg[binary]==3.2.1
+# PostgreSQL driver (binary build for Lambda/OCI ease).
+# Ops: Used for RDS Postgres credential rotation. Prefer TLS enforcement.
+
+PyMySQL==1.1.1
+# MySQL client for Python; used for RDS MySQL rotations.
+# Security: Supports SSL CA enforcement if provided via env var.
+
+cryptography==43.0.1
+# Core crypto primitives; used indirectly via boto3/oci for TLS, also for potential HMAC or encryption.
+# Security: Keep updated; critical to prevent crypto vulnerabilities.
+
+oracledb==2.2.1
+# Oracle Database driver for Python; required for Autonomous Database Dedicated (ADB-D) rotations.
+# Ops: Supports wallet-based TCPS; wallet sourcing strategy must avoid persisting secrets.
