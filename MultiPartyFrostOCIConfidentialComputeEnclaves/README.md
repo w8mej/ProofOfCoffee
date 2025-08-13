@@ -1,28 +1,93 @@
-# MPC Ephemeral Signing — Python gRPC + Protobuf POC (TEE-attested)
+# MPC Ephemeral Signing — Python gRPC + Protobuf Proof of Concept (TEE-Attested on OCI Confidential Compute)
 
-This variant adds **TEE attestation (AMD SEV-SNP)** and optional **mTLS** so every RPC
-is served only if the caller proves it runs in an approved OCI Confidential VM.
+## Overview
+This proof-of-concept (POC) demonstrates how multiple independent parties can **approve and sign artifacts** using a **Multi-Party Computation (MPC)** pattern, **short-lived certificates**, and **hardware-backed attestation** in **Oracle Cloud Infrastructure (OCI) Confidential Computing enclaves**.
 
-> ⚠️ Crypto note: Threshold signing remains a POC (approval quorum + Ed25519).
-> Swap `common/` with a real MPC/FROST engine for production.
+While the cryptographic core is simplified (single Ed25519 key vs. true MPC/FROST), the **service orchestration, trust model, and attestation plumbing are production-oriented** — making it straightforward to swap in a real threshold-signature backend later.
 
-## What’s new
-- **TEE attestation on every RPC** via gRPC metadata (nonce + evidence + policy hash).
-- **Server interceptors** verify evidence before passing calls to handlers.
-- **Client interceptors** attach evidence automatically.
-- **Optional mTLS** for all channels (in addition to attestation).
+---
+
+## Goals of This POC
+- **Simulate MPC artifact signing** using a quorum of *engineers* and *stewards*.
+- **Enforce hardware trust guarantees** with AMD SEV-SNP attestation in OCI Confidential VMs.
+- **Mint ephemeral code-signing certificates** tied to session state, participants, and enclave identity.
+- **Log signed artifacts** in a transparency log for auditability.
+- **Provide a gRPC + Protobuf microservice framework** that can be hardened for production.
+
+---
+
+## Security & Operations Notes
+- **Defense-in-depth**: mTLS + SNP attestation for mutual identity and integrity.
+- **Replay Protection**: Fresh nonce per attestation bound into `report_data`.
+- **Policy Pinning**: All RPCs fail if `TEE_POLICY_HASH` mismatches.
+- **Auditing**: Interceptors log user, method, attestation digest, and session.
+- **Secrets Management**: Store TLS certs and policy hash in OCI Vault with rotation.
+
+---
+
+## Tunables
+| Variable | Purpose |
+|----------|---------|
+| `TEE_POLICY_HASH` | Hex-encoded SHA-256 of allowed enclave measurement |
+| `REQUIRED_ENGINEERS` / `REQUIRED_STEWARDS` | Quorum counts for Coordinator |
+| `*_TLS_CERT` / `*_TLS_KEY` | TLS certs for mTLS |
+| `CLIENT_TLS_CA` / `CLIENT_TLS_CERT` / `CLIENT_TLS_KEY` | Client mTLS settings |
+
+---
+
+## Path to Production
+To make this production-ready:
+- Replace `MockThresholdEngine` with a **true MPC/FROST threshold signer** (distributed keygen, hardware-wrapped shares).
+- Use **OCI Vault / HSM** for key custody.
+- Replace in-memory TLog with a **Merkle-tree-backed transparency log**.
+- Integrate **real WebAuthn** for participant identity verification.
+- Enforce **policy and role management** in a persistent datastore.
+
+---
+
+
+## Architecture
+The POC is split into four gRPC microservices:
+
+1. **Coordinator** – Orchestrates sessions, tracks approvals, triggers signing once quorum is met.
+2. **Ephemeral CA** – Issues short-lived code-signing certificates bound to the enclave’s measured state and session metadata.
+3. **Transparency Log** – Stores immutable records of signed artifacts (in-memory for POC).
+4. **AuthN Service** – Verifies participant identity (demo WebAuthn token in this POC).
+
+Clients interact with these services via a Python CLI (`clients/cli.py`).
+
+---
+
+## Security Model
+- **mTLS** — Authenticates *who* is talking to whom.
+- **SNP Attestation** — Proves *where and how* the code is running (enforced on every RPC).
+- **Ephemeral Keys** — No long-term private signing keys; each session is isolated.
+- **Quorum Enforcement** — Only proceeds when the configured number of engineers and stewards have approved.
+- **Transparency Logging** — Signed artifacts and associated metadata are published for audit.
+
+---
+
+## What This POC Is Not
+- **Not real MPC** — The threshold signing here is simulated (approval → single key sign).  
+  Replace `common/mpc_provider.py` with a true MPC/FROST implementation to achieve actual distributed key control.
+- **Not production-secure storage** — Keys are in memory; no HSM/KMS binding.
+- **Not a tamper-evident log** — The TLog is in-memory; replace with Merkle-tree-backed (e.g., Rekor).
+
+---
 
 ## Setup
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-python -m grpc_tools.protoc -I proto proto/mpc.proto --python_out=gen --grpc_python_out=gen
+python -m grpc_tools.protoc -I proto proto/mpc.proto     --python_out=gen --grpc_python_out=gen
 ```
 
-## Run services (four terminals)
+---
+
+## Running the Services (Four Terminals)
 ```bash
-# set the same TEE policy hash on all services (hex string representing image/policy)
-export TEE_POLICY_HASH=<64-hex-sha256-of-your-policy>
+# Set the same TEE policy hash for all services (SHA-256 hex of container/image/policy)
+export TEE_POLICY_HASH=<64-char-hex>
 
 python servers/ca_server.py
 python servers/tlog_server.py
@@ -30,46 +95,41 @@ python servers/auth_server.py
 python servers/coordinator_server.py
 ```
 
-## Demo flow
+---
+
+## Demo Flow
 ```bash
-# new session
-python clients/cli.py request --artifact-digest $(printf foo | shasum -a 256 | awk '{print $1}')
+# Create a new signing session
+python clients/cli.py request   --artifact-digest $(printf foo | shasum -a 256 | awk '{print $1}')
 
-# join 3 times from separate shells (1 engineer + 2 stewards)
-python clients/cli.py join --session <SESSION_ID> --name Alice --email alice@ex.com
-python clients/cli.py join --session <SESSION_ID> --name Bob   --email bob@ex.com
-python clients/cli.py join --session <SESSION_ID> --name Carol --email carol@ex.com
+# Join session as participants (1 engineer + 2 stewards)
+python clients/cli.py join --session <SESSION_ID> --name Alice --email alice@example.com
+python clients/cli.py join --session <SESSION_ID> --name Bob   --email bob@example.com
+python clients/cli.py join --session <SESSION_ID> --name Carol --email carol@example.com
 
-# verify transparency log
+# Verify transparency log entry
 python clients/cli.py verify --artifact-digest <DIGEST>
 ```
 
-## Running on **OCI Confidential VMs**
+---
+
+## Running Inside OCI Confidential VMs
 1. Launch **Confidential** AMD EPYC instances (SEV/SEV-SNP enabled).
-2. Bake a **golden image** (container/venv) and compute `TEE_POLICY_HASH` (e.g., SHA-256 of the image rootfs or signed container digest). Export it on all nodes.
-3. Ensure the guest exposes `/dev/sev-guest` (SNP). Replace the fallback in
-   `common/attestation_snp.py` with a real `SNP_GET_REPORT` ioctl and verification
-   (or call a central Verifier). Bind a **fresh nonce** + `TEE_POLICY_HASH` when requesting the report.
-4. Enable **mTLS**:
-   - Servers: set `*_TLS_CERT` and `*_TLS_KEY` env vars to PEM files.
-   - CLI/clients: set `CLIENT_TLS_CA`, `CLIENT_TLS_CERT`, `CLIENT_TLS_KEY`.
-5. Network: deploy on a private subnet; allow only required ports. Enable logging to OCI Logging.
+2. Bake your container/venv into a **golden image** and compute:
+   ```bash
+   sha256sum <rootfs-or-container-digest>  # → TEE_POLICY_HASH
+   ```
+3. Export `TEE_POLICY_HASH` to all services and clients.
+4. Ensure `/dev/sev-guest` is present and replace the `common/attestation_snp.py` stub with:
+   - A real `SNP_GET_REPORT` ioctl call  
+   - Verification against AMD’s root cert or a trusted verifier
+5. Enable mTLS:
+   ```bash
+   export CA_TLS_CERT=...
+   export CA_TLS_KEY=...
+   ```
+6. Deploy on a **private subnet**, open only required ports, and log to OCI Logging.
 
-## Security & Operations notes
-- **Defense in depth**: mTLS authenticates *who*, SNP attestation proves *where/how*.
-- **Replay protection**: Nonce is bound in the attestation report_data.
-- **Policy pinning**: Requests fail if `TEE_POLICY_HASH` doesn’t match.
-- **Auditing**: Add interceptors to emit user/session/method/attestation-digest.
-- **Secrets**: Store certs/keys and policy in **OCI Vault**; rotate regularly.
+---
 
-## Tunables
-- `TEE_POLICY_HASH` (hex) — required for both client and server interceptors.
-- Coordinator: `REQUIRED_ENGINEERS`, `REQUIRED_STEWARDS`, `COORD_BIND`, `COORD_THREADS`, `COORD_TLS_CERT/KEY`
-- CA: `CA_BIND`, `CA_THREADS`, `CA_TTL_SECONDS`, `CA_TLS_CERT/KEY`
-- TLog: `TLOG_BIND`, `TLOG_THREADS`, `TLOG_TLS_CERT/KEY`
-- Auth: `AUTH_BIND`, `AUTH_THREADS`, `AUTH_TLS_CERT/KEY`, `AUTH_DEMO_TOKEN`
-- Client: `CLIENT_TLS_CA`, `CLIENT_TLS_CERT`, `CLIENT_TLS_KEY`, `COORDINATOR_ADDR`, `TLOG_ADDR`
 
-## Swap in real MPC/FROST
-Keep this API and replace `common/mpc_provider.py` with a provider that runs DKG,
-stores hardware-wrapped shares, and emits true threshold partials for aggregation.
