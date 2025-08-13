@@ -1,0 +1,56 @@
+# -----------------------------------------------------------------------------
+# File: docker-compose.yml
+# What it does:
+#   Local Orchestration for all four gRPC services (Coordinator, CA, TLog, AuthN)
+#   with shared TEE_POLICY_HASH for demo. TLS is off by default; mount certs to enable.
+#
+# Security & Ops notes:
+#   - For production, place services on a private network and enable TLS.
+#   - Pin image digests and use a private registry with signing/attestation.
+#   - Consider read-only rootfs and drop Linux capabilities.
+# -----------------------------------------------------------------------------
+version: "3.9"
+services:
+  ca:
+    build:
+      context: .
+      dockerfile: Dockerfile.ca
+    environment:
+      - TEE_POLICY_HASH=${TEE_POLICY_HASH:-}
+      - CA_BIND=[::]:50052
+    ports: ["50052:50052"]
+
+  tlog:
+    build:
+      context: .
+      dockerfile: Dockerfile.tlog
+    environment:
+      - TEE_POLICY_HASH=${TEE_POLICY_HASH:-}
+      - TLOG_BIND=[::]:50053
+    ports: ["50053:50053"]
+    depends_on: ["ca"]
+
+  auth:
+    build:
+      context: .
+      dockerfile: Dockerfile.auth
+    environment:
+      - TEE_POLICY_HASH=${TEE_POLICY_HASH:-}
+      - AUTH_BIND=[::]:50054
+      - AUTH_DEMO_TOKEN=demo-token
+    ports: ["50054:50054"]
+
+  coordinator:
+    build:
+      context: .
+      dockerfile: Dockerfile.coordinator
+    environment:
+      - TEE_POLICY_HASH=${TEE_POLICY_HASH:-}
+      - COORD_BIND=[::]:50051
+      - CA_ADDR=ca:50052
+      - TLOG_ADDR=tlog:50053
+      - AUTH_ADDR=auth:50054
+      - REQUIRED_ENGINEERS=1
+      - REQUIRED_STEWARDS=2
+    ports: ["50051:50051"]
+    depends_on: ["ca", "tlog", "auth"]

@@ -1,0 +1,34 @@
+# -----------------------------------------------------------------------------
+# File: requirements.txt
+#
+# Purpose:
+#   Defines the Python package dependencies required to run the MPC Ephemeral
+#   Signing Proof-of-Concept (Coordinator, Ephemeral CA, Transparency Log,
+#   AuthN services, and CLI client).
+#
+# Security & Ops notes:
+#   - Pin versions in production to ensure reproducible builds and avoid
+#     unverified upstream changes.
+#   - In high-security environments, vendor and verify all dependencies via
+#     cryptographic hashes (e.g., `pip install --require-hashes`).
+#   - Audit dependencies for known CVEs before deployment (e.g., `pip-audit`).
+#   - For FIPS-compliant environments, ensure `cryptography` build is linked
+#     against an approved OpenSSL version.
+#
+# Tunables:
+#   - Versions may be upgraded in development to access new features, but
+#     production should pass through a regression/security testing pipeline.
+# -----------------------------------------------------------------------------
+
+# Core gRPC framework for RPC communication between services.
+grpcio>=1.62.1
+
+# gRPC code generation tools for compiling `.proto` definitions into Python stubs.
+grpcio-tools>=1.62.1
+
+# Protocol Buffers runtime library for message serialization/deserialization.
+protobuf>=4.25.2
+
+# Cryptography primitives (Ed25519, x509, hashing) for signing and certificate issuance.
+cryptography>=42.0.5
+

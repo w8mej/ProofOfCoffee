@@ -1,0 +1,19 @@
+#cloud-config
+# -----------------------------------------------------------------------------
+# File: terraform/oci/templates/cloud_init.yaml
+# What it does:
+#   Boots the instance, installs Docker, and runs the service container
+#   with TEE_POLICY_HASH exported so the gRPC interceptors enforce attestation.
+#
+# Security & Ops notes:
+#   - Use a minimal, hardened image. Consider read-only rootfs for the container.
+#   - For private registries, add login commands (docker login).
+# -----------------------------------------------------------------------------
+package_update: true
+packages:
+  - docker.io
+
+runcmd:
+  - [ bash, -lc, "systemctl enable --now docker" ]
+  - [ bash, -lc, "docker pull ${container_image}" ]
+  - [ bash, -lc, "docker run -d --restart=always -e TEE_POLICY_HASH=${tee_policy_hash} -p ${service_port}:${service_port} ${container_image}" ]
