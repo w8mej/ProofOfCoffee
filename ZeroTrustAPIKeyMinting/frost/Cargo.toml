@@ -1,0 +1,7 @@
+
+[workspace]
+members = ["keygen", "signer", "coordinator"]
+
+[profile.release]
+lto = true
+codegen-units = 1

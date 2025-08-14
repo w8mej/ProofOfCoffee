@@ -1,0 +1,68 @@
+// policy.json — Documented role-based minting policy (PoC)
+//
+// Purpose
+// -------
+// Defines *static* authorization rules for token minting. The mint API loads this
+// document and enforces it BEFORE creating any JWT, alongside other guards (e.g. OPA).
+//
+// Security & Ops
+// --------------
+// - Principle of Least Privilege: limit each role to the smallest set of scopes it needs.
+// - Short TTLs: reduce blast radius for leaked/abused tokens.
+// - Review & Change Control: treat this file like code (PRs, reviewers from Security + Service Owners).
+// - Versioning: embed a policy hash in minted tokens and/or approval challenges to bind decisions to a
+//   specific version (see server code using `POLICY_HASH`).
+//
+// Tunable / Config
+// ----------------
+// - Add/trim scopes per role to match your service perimeter (e.g., read:*, write:staging).
+// - Adjust `max_ttl_seconds` by risk: high-privilege roles (e.g., SRE) usually get *shorter* TTLs.
+// - If you also use OPA, keep this JSON as the coarse, explicit allow-list; use OPA for context-aware rules.
+//
+// Production Readiness Enhancements
+// ---------------------------------
+// - Include business-context attributes (ticketId, changeWindow, env) and enforce them via OPA/Rego.
+// - Maintain a policy version (e.g., `policy_version`: "2025-08-01") and publish a signed digest (KMS).
+// - Consider environment splits (dev/staging/prod sections) or separate files per env.
+// - Add a deny-list section for emergency scope blocks.
+//
+// Notes
+// -----
+// This is JSONC (JSON with comments) for readability. If your loader only accepts strict JSON,
+// remove the comments or store comments under a `_doc` key that your code ignores.
+
+{
+  // Top-level map of role → rule-set.
+  "roles": {
+    // ------------------------------------------------------------------------
+    // Role: engineer
+    // Typical developer privileges for velocity with safe boundaries.
+    // ------------------------------------------------------------------------
+    "engineer": {
+      // Scopes the role may request. Any requested scope outside this set is denied.
+      "allow_scopes": [
+        "read:logs",      // read-only visibility
+        "write:staging",  // deploy/apply in staging only
+        "deploy:canary"   // controlled rollouts
+      ],
+      // Upper bound on token lifetime (seconds). Requests above this are rejected.
+      // Engineers get up to 60 minutes for convenience in non-prod workflows.
+      "max_ttl_seconds": 3600
+    },
+
+    // ------------------------------------------------------------------------
+    // Role: sre
+    // Higher-privileged responders/operators—allow prod writes but shorten TTL.
+    // ------------------------------------------------------------------------
+    "sre": {
+      "allow_scopes": [
+        "read:logs",
+        "write:staging",
+        "deploy:canary",
+        "write:prod"      // sensitive: direct production changes
+      ],
+      // Shorter TTL (30 minutes) to tighten operational control for high-impact actions.
+      "max_ttl_seconds": 1800
+    }
+  }
+}

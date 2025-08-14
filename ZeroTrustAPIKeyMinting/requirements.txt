@@ -1,0 +1,36 @@
+# requirements.txt — Documented dependency list for Zero-Trust Minting PoC
+#
+# Purpose
+# -------
+# Defines the Python runtime dependencies needed by the mint API, MPC components,
+# WebAuthn handling, and cloud/KMS integrations.
+#
+# Security & Ops
+# --------------
+# - Pin versions to prevent accidental breaking changes.
+# - Review changelogs for security fixes before upgrades.
+# - Use pip’s --require-hashes in production for stronger supply-chain integrity.
+# - In prod, build from a lockfile (pip-tools, Poetry, or PEP 665) and vendor/scan with tools like pip-audit or Safety.
+
+# CLI utilities
+click==8.1.7                 # CLI framework for admin/tools (e.g., src.cli.mint, src.mpc.shares)
+
+# Crypto primitives & cert handling
+cryptography==44.0.1         # Core crypto (Ed25519, RSA, PKCS#1/PKCS#8, X.509)
+PyJWT==2.9.0                  # JWT encode/decode (minted tokens)
+pyOpenSSL==24.2.1             # X.509/SSL utilities; some libs still depend on it
+
+# Web API
+fastapi==0.115.0              # Main API server framework for minting endpoints
+uvicorn==0.30.6               # ASGI server to run FastAPI
+pydantic==2.8.2               # Request/response validation, type enforcement
+
+# Config & HTTP
+python-dotenv==1.0.1          # Load env vars from .env / env.example
+requests==2.32.4              # HTTP client for MPC coordinator, KMS calls
+certifi==2024.7.4             # CA bundle for HTTPS validation
+
+# WebAuthn, HSM, and KMS integration
+python-pkcs11==0.7.0          # PKCS#11 bindings for HSM/YubiKey PIV
+python-fido2==1.1.2           # WebAuthn/FIDO2 server-side helpers
+oci==2.133.0                   # Oracle Cloud Infrastructure SDK (KMS approvals, object store)

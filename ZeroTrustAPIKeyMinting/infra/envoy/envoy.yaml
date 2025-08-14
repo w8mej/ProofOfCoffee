@@ -1,0 +1,142 @@
+# envoy.yaml — Envoy proxy with ext_authz → OPA gRPC check
+#
+# Security & Ops
+# - ExtAuthz runs BEFORE routing to your backend; OPA must validate JWT, KMS receipt headers, scopes, TTL, etc.
+# - Bind the listener to a private interface/security group; terminate TLS in Envoy (mTLS to upstreams) in prod.
+# - Set strict timeouts and circuit breakers; fail CLOSED on authz outages for sensitive paths.
+# - Prefer SDS for certificates (if TLS enabled) and runtime discovery (xDS) for dynamic policy updates.
+#
+# Tunables
+# - listener.address/port: where Envoy listens for incoming traffic.
+# - ext_authz timeout: keep small (e.g., 200ms) with good caching at OPA or a local sidecar.
+# - with_request_body size: only what your policy needs; keep small to avoid DOS vectors.
+# - clusters: switch to STRICT_DNS + TLS to reach OPA and backends; add health checks.
+#
+# Improvements / Production
+# - Add TLS contexts for both downstream (listener) and upstream (OPA/backend) and require mTLS.
+# - Add rate_limit filter, request size limits, header sanitization (header_to_remove), and CORS (if needed).
+# - Enable access logs with redaction; export metrics via /stats or Prometheus integration.
+# - Use EDS (xDS) from control plane and OPA Bundle API for policy distribution/versioning.
+
+static_resources:
+  listeners:
+  - name: listener_0
+    address:
+      socket_address:
+        address: 0.0.0.0         # TODO: bind to private IP in production
+        port_value: 10000
+    filter_chains:
+    - filters:
+      - name: envoy.filters.network.http_connection_manager
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+          stat_prefix: ingress_http
+
+          # Optional: sanitize inbound headers before authz & routing
+          # request_headers_to_remove: ["x-forwarded-client-cert"]
+
+          route_config:
+            name: local_route
+            virtual_hosts:
+            - name: local_service
+              domains: ["*"]     # TODO: restrict to expected hostnames
+              routes:
+              - match: { prefix: "/" }
+                route:
+                  cluster: service_backend
+                  # Optional: per-route timeouts
+                  # timeout: 5s
+                # Per-route override: pass extra context to OPA (visible in input.attributes)
+                typed_per_filter_config:
+                  envoy.filters.http.ext_authz:
+                    "@type": type.googleapis.com/envoy.extensions.filters.http.ext_authz.v3.ExtAuthzPerRoute
+                    check_settings:
+                      context_extensions:
+                        example: "opa"    # Arbitrary metadata for policy; e.g., service name/env
+
+          http_filters:
+          # 1) External authorization filter (OPA gRPC)
+          - name: envoy.filters.http.ext_authz
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.http.ext_authz.v3.ExtAuthz
+
+              # v3 API for transport types; use gRPC to OPA's envoy_ext_authz_grpc
+              transport_api_version: V3
+
+              # NOTE: keep small; only include request bodies if policy needs them
+              with_request_body:
+                max_request_bytes: 8192          # Tunable; lower if you only need headers
+                allow_partial_message: true
+
+              # Fail-closed behavior (default): if OPA is unavailable or returns error → 403
+              failure_mode_allow: false          # DO NOT set true in production unless you understand risk
+
+              # Send raw headers to OPA for policy (JWT, x-kms-sig, etc.)
+              include_peer_certificate: false    # Set true if you need downstream client cert in policy
+
+              # gRPC service pointing at OPA
+              grpc_service:
+                envoy_grpc:
+                  cluster_name: opa
+                timeout: 0.2s                    # Keep tight; ensure OPA is local and fast
+
+          # 2) Router (must be last)
+          - name: envoy.filters.http.router
+
+  clusters:
+  # Backend service cluster
+  - name: service_backend
+    connect_timeout: 1s
+    type: LOGICAL_DNS                 # For static PoC; use STRICT_DNS/EDS in prod
+    lb_policy: ROUND_ROBIN
+    load_assignment:
+      cluster_name: service_backend
+      endpoints:
+      - lb_endpoints:
+        - endpoint:
+            address:
+              socket_address:
+                address: 127.0.0.1
+                port_value: 8080
+    # ---- Production hardening for upstream TLS (example) ----
+    # transport_socket:
+    #   name: envoy.transport_sockets.tls
+    #   typed_config:
+    #     "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
+    #     sni: api.internal.example.com
+    #     common_tls_context:
+    #       validation_context:
+    #         trusted_ca:
+    #           filename: /tls/ca.crt
+    #       tls_params:
+    #         tls_minimum_protocol_version: TLSv1_3
+
+  # OPA ext_authz cluster
+  - name: opa
+    type: LOGICAL_DNS                 # OPA sidecar/local; STRICT_DNS in prod
+    connect_timeout: 1s
+    lb_policy: ROUND_ROBIN
+    load_assignment:
+      cluster_name: opa
+      endpoints:
+      - lb_endpoints:
+        - endpoint:
+            address:
+              socket_address:
+                address: 127.0.0.1     # OPA running locally (docker-compose/k8s sidecar)
+                port_value: 9191       # OPA's envoy_ext_authz_grpc plugin port
+    # Optional: health checks for OPA
+    # health_checks:
+    # - timeout: 0.2s
+    #   interval: 5s
+    #   unhealthy_threshold: 3
+    #   healthy_threshold: 1
+    #   grpc_health_check: {}
+
+# Optional: Admin interface for stats and /config_dump; protect with ACLs or bind to localhost.
+# admin:
+#   access_log_path: /tmp/admin_access.log
+#   address:
+#     socket_address:
+#       address: 127.0.0.1
+#       port_value: 9901

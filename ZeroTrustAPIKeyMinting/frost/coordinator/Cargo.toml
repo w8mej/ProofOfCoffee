@@ -1,0 +1,78 @@
+# frost-coordinator/Cargo.toml
+#
+# ===========================
+# Security & Ops Considerations
+# ===========================
+# - Pin dependency versions strictly to reduce supply chain risk.
+# - Prefer crates with active maintenance and security reviews.
+# - rustls is chosen over native-tls for memory safety and modern cipher support.
+# - All network-facing components (axum, reqwest) should be combined with mTLS and strict TLS config (min TLS 1.3).
+# - Review the default features of each crate to ensure no unnecessary attack surface.
+# - Consider vendoring crates and enabling Cargo.lock checks in CI for reproducibility.
+#
+# ===========================
+# Tunables / Config
+# ===========================
+# - axum, tokio: The async runtime and HTTP server — concurrency can be tuned via environment variables (e.g., Tokio worker count).
+# - tracing: Logging granularity can be controlled via RUST_LOG or TRACING env vars.
+# - prometheus: Metrics endpoint scraping interval, metric names, and labels are configurable downstream.
+# - reqwest: Adjust default client timeouts for signer RPC calls to balance resilience vs latency.
+# - base64: Used for encoding/decoding signature shares — no tunables, but ensure proper padding handling.
+#
+# ===========================
+# Possible Improvements
+# ===========================
+# - Replace "*" or loose version ranges with exact semantic versions for all deps.
+# - Audit transitive dependencies for CVEs.
+# - Consider splitting dependencies into "runtime" vs "dev" to slim production images.
+# - Use minimal-versions builds in CI to detect future incompatibilities.
+# - Integrate with cargo-audit to catch vulnerable crate versions automatically.
+#
+# ===========================
+# Production Hardening Ideas
+# ===========================
+# - Enforce Cargo.lock in VCS and CI.
+# - Build in an offline, reproducible environment.
+# - Enable LTO (Link Time Optimization) in release builds for smaller binaries.
+# - Strip debug symbols for prod deploys; keep separate symbol files for crash analysis.
+# - Use a crate like `secrecy` for sensitive material instead of raw Vec<u8>.
+# - Perform fuzz testing (cargo-fuzz) on signature aggregation and message parsing paths.
+#
+
+[package]
+name = "frost-coordinator"
+version = "0.1.0"
+edition = "2021" # 2021 edition for modern language features and safety improvements
+
+[dependencies]
+# Web framework for async HTTP server and routing
+axum = "0.7"
+
+# Serialization/deserialization for JSON payloads
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Async runtime with multi-threaded executor
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+# Structured logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+
+# Threshold Ed25519 signatures (FROST)
+frost-ed25519 = "0.7"
+
+# Ergonomic error handling
+anyhow = "1.0"
+
+# HTTP client with Rustls TLS for mTLS RPC calls to signers
+reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
+
+# Base64 encoding/decoding for message/signature exchange
+base64 = "0.22"
+
+# Metrics collection
+prometheus = "0.13"
+
+# Static global initialization (for metrics counters, etc.)
+lazy_static = "1"

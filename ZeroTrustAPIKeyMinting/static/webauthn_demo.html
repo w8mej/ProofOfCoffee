@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<!--
+static/webauthn_demo.html — Minimal WebAuthn UI 
+
+Purpose
+-------
+A tiny, framework-free Proof of Concept (PoC) page to:
+  1) Register a WebAuthn credential (PublicKeyCredentialCreationOptions),
+  2) Assert (authenticate) with the registered credential.
+
+These flows exercise the FastAPI endpoints implemented in `server/webauthn_api.py`.
+
+Security & Ops Notes
+--------------------
+- RP Policy:
+  • The RP ID and Origin are enforced server-side. This page reads values returned by
+    `/webauthn/*/start` and passes them to the browser’s WebAuthn APIs.
+- Base64url Handling:
+  • WebAuthn uses ArrayBuffers and base64url. We normalize inputs/outputs via helpers below.
+- Replay Resistance:
+  • Server should store & invalidate challenges and enforce `sign_count` monotonicity.
+    This proof of concept focuses on wiring; the backend PoC implements basic checks.
+- CSRF:
+  • If you host this page in a real service, add CSRF defenses. For PoC, we rely on
+    same-origin fetches and do not store cookies.
+
+Tunable / Config (deployment)
+-----------------------------
+- Endpoints are hard-coded to relative paths (/webauthn/*). If you front this with Envoy/OPA,
+  ensure routes are reachable from the page's origin.
+- To "mint-after-assert", you could extend `startAssert()` to POST the assertion object to `/mint`
+  with `auth_method="webauthn"` and the requested scopes/TTL.
+
+Production Considerations
+-------------------------
+- Error UX: This page prints JSON responses into <pre> blocks. Replace with UI to guide users.
+- Attestation: To enforce hardware model/AA trust at registration, set `attestation: "direct"`
+  and verify via MDS or a pinned AA trust store server-side.
+-->
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <title>WebAuthn PoC - Zero Trust API Minting</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <!-- Basic styling for readability -->
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial, sans-serif; margin: 2rem; line-height: 1.4; }
+    h1, h2 { margin-bottom: .25rem; }
+    input { padding: .4rem .6rem; font-size: 1rem; }
+    button { padding: .5rem .75rem; font-size: 1rem; cursor: pointer; margin-right: .5rem; }
+    pre { background: #f6f8fa; padding: .75rem; border-radius: 8px; max-width: 900px; overflow: auto; }
+    .row { margin: .75rem 0; }
+  </style>
+</head>
+<body>
+  <h1>WebAuthn Proof of Concept</h1>
+  <p>This minimal page enrolls and asserts a WebAuthn credential against the PoC backend.</p>
+
+  <div class="row">
+    <label for="username"><strong>Username</strong></label>
+    <input id="username" placeholder="alice@example.com" value="alice@example.com" />
+  </div>
+
+  <h2>Register</h2>
+  <div class="row">
+    <button onclick="startRegister()">Start Register</button>
+  </div>
+  <pre id="register-status" aria-live="polite"></pre>
+
+  <h2>Assert (Authenticate)</h2>
+  <div class="row">
+    <button onclick="startAssert()">Assert Credential</button>
+  </div>
+  <pre id="assert-status" aria-live="polite"></pre>
+
+  <script>
+    // -------------------------- base64url helpers (WebAuthn needs ArrayBuffer ⇄ b64url) ---------
+    const b64u = {
+      enc: (buf) =>
+        btoa(String.fromCharCode(...new Uint8Array(buf)))
+          .replace(/\+/g, "-")
+          .replace(/\//g, "_")
+          .replace(/=+$/g, ""),
+      dec: (s) => {
+        // normalize base64url -> base64
+        s = s.replace(/-/g, "+").replace(/_/g, "/");
+        // pad to multiple of 4
+        while (s.length % 4) s += "=";
+        const bin = atob(s);
+        const out = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+        return out.buffer;
+      },
+    };
+
+    // Utility to stringify JSON safely into <pre>
+    function pretty(el, obj) {
+      document.getElementById(el).textContent = JSON.stringify(obj, null, 2);
+    }
+
+    // -------------------------- Registration Flow ----------------------------------------------
+    async function startRegister() {
+      const username = document.getElementById("username").value.trim();
+      pretty("register-status", { status: "starting registration...", username });
+
+      try {
+        // 1) Ask server for creation options (contains rpId + challenge)
+        const startRes = await fetch("/webauthn/register/start", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ username }),
+        }).then((r) => r.json());
+
+        // 2) Construct PublicKeyCredentialCreationOptions for navigator.credentials.create
+        const publicKey = {
+          challenge: b64u.dec(startRes.challenge),
+          rp: { id: startRes.rpId, name: "ZeroTrust API Minting" },
+          user: {
+            id: b64u.dec(startRes.user.id),
+            name: startRes.user.name,
+            displayName: startRes.user.name,
+          },
+          pubKeyCredParams: startRes.pubKeyCredParams,
+          timeout: startRes.timeout,
+          attestation: startRes.attestation, // "none" in the PoC; use "direct" in prod with MDS
+        };
+
+        // 3) Ask the authenticator to create a credential
+        const credential = await navigator.credentials.create({ publicKey });
+        if (!credential) throw new Error("credential creation returned null");
+
+        // 4) Extract and base64url-encode binary response parts
+        const attestationObject = b64u.enc(credential.response.attestationObject);
+        const clientDataJSON = b64u.enc(credential.response.clientDataJSON);
+
+        // 5) Finish registration with the server (which persists the credential public key)
+        const finishRes = await fetch("/webauthn/register/finish", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ username, attestationObject, clientDataJSON }),
+        }).then((r) => r.json());
+
+        pretty("register-status", { ok: true, response: finishRes });
+      } catch (e) {
+        pretty("register-status", { ok: false, error: String(e) });
+      }
+    }
+
+    // -------------------------- Assertion (Authentication) Flow --------------------------------
+    async function startAssert() {
+      const username = document.getElementById("username").value.trim();
+      pretty("assert-status", { status: "starting assertion...", username });
+
+      try {
+        // 1) Ask server for assertion options (contains rpId + challenge + allowCredentials)
+        // NOTE: This was incorrectly calling /webauthn/register/start in the initial version.
+        const startRes = await fetch("/webauthn/assert/start", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ username }),
+        }).then((r) => {
+          if (!r.ok) throw new Error(`assert/start ${r.status}`);
+          return r.json();
+        });
+
+        const publicKey = {
+          challenge: b64u.dec(startRes.challenge),
+          rpId: startRes.rpId,
+          timeout: startRes.timeout,
+          allowCredentials: (startRes.allowCredentials || []).map((c) => ({
+            type: "public-key",
+            id: b64u.dec(
+              // Backend stores credential_id in base64, normalize to b64url before decode
+              typeof c.id === "string" ? c.id : ""
+            ),
+          })),
+        };
+
+        // 2) Ask authenticator to sign the challenge with the stored credential
+        const assertion = await navigator.credentials.get({ publicKey });
+        if (!assertion) throw new Error("assertion returned null");
+
+        // 3) Extract and base64url-encode binary pieces for transport to server
+        const rawId = b64u.enc(assertion.rawId);
+        const authenticatorData = b64u.enc(assertion.response.authenticatorData);
+        const clientDataJSON = b64u.enc(assertion.response.clientDataJSON);
+        const signature = b64u.enc(assertion.response.signature);
+
+        // 4) Send to server for verification
+        const assertRes = await fetch("/webauthn/assert", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            username,
+            rawId,
+            authenticatorData,
+            clientDataJSON,
+            signature,
+          }),
+        }).then((r) => r.json());
+
+        pretty("assert-status", { ok: true, response: assertRes });
+
+        // Optional: chain directly into /mint (uncomment to enable "mint-after-assert")
+        /*
+        if (assertRes && assertRes.ok) {
+          const mintBody = {
+            user: username,
+            role: "engineer",
+            scopes: ["read:logs", "write:staging"],
+            ttl_seconds: 900,
+            auth_method: "webauthn",
+            webauthn_assertion: { rawId, authenticatorData, clientDataJSON, signature }
+          };
+          const mintRes = await fetch("/mint", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(mintBody),
+          }).then(r => r.json());
+          pretty("assert-status", { ok: true, assert: assertRes, mint: mintRes });
+        }
+        */
+      } catch (e) {
+        pretty("assert-status", { ok: false, error: String(e) });
+      }
+    }
+  </script>
+</body>
+</html>

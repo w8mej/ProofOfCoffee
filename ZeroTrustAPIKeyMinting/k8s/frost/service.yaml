@@ -1,0 +1,49 @@
+# =============================================================================
+# k8s/frost-signer-svc.yaml — Headless Service for FROST Signers (documented)
+#
+# Purpose
+# - Exposes all `frost-signer` pods in the `frost` namespace for direct,
+#   pod-level endpoint discovery by the `frost-coordinator` or other
+#   authorized workloads.
+#
+# - Uses `clusterIP: None` to create a **headless service**, which:
+#     - Skips kube-proxy load-balancing.
+#     - Returns individual pod IPs via DNS A records:
+#       e.g., `frost-signer.frost.svc.cluster.local` resolves to
+#       the set of all signer pod IPs.
+#
+# Security & Ops
+# - Access control is enforced via NetworkPolicies:
+#     - Only `frost-coordinator` pods can connect on TCP/7000.
+#     - All egress from signers is denied (zero-trust model).
+#
+# - The service itself does not provide TLS termination; mTLS is handled
+#   in-pod using the `frost-tls` secret.
+#
+# Operational Guidance
+# - Ensure `SIGNER_ID` in each pod is unique (hostIP in this config) so
+#   coordinator can map endpoints to signer IDs.
+# - Monitor DNS resolution and pod readiness; headless services depend on
+#   healthy endpoints for correct operation.
+#
+# Production Considerations
+# - If scaling signers across multiple zones, ensure network latency is
+#   acceptable for threshold signing operations (<100ms preferred).
+# - For higher security, deploy signers in private subnets without NAT
+#   or Internet access.
+# - Apply PodDisruptionBudgets to maintain quorum during rolling updates.
+# =============================================================================
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: frost-signer
+  namespace: frost
+spec:
+  selector:
+    app: frost-signer
+  clusterIP: None  # headless for direct endpoint discovery
+  ports:
+    - name: signer
+      port: 7000
+      targetPort: 7000

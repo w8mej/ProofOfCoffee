@@ -1,0 +1,175 @@
+# =============================================================================
+# k8s/frost-signer-daemonset.yaml — DaemonSet for FROST Signers (documented)
+#
+# Security & Ops
+# - **One signer per node** via DaemonSet, aligning crypto shares with distinct fault domains.
+# - **Non-root, least-privilege**: drops all Linux caps, read-only root FS, seccomp RuntimeDefault,
+#   AppArmor runtime/default, no service account token auto-mount.
+# - **mTLS**: mounts cert-manager–issued TLS materials for mutual auth with the coordinator.
+# - **JWT auth**: HS256 secret read from a mounted file (PoC); prefer RS256/EdDSA in production.
+# - **Ephemeral state**: `FROST_STATE` uses emptyDir; consider `medium: Memory` to avoid disk persistence.
+#
+# Tunables / Config
+# - `env.BIND`: signer’s listen address/port (default 0.0.0.0:7000).
+# - `env.SIGNER_ID`: currently sourced from node host IP (Downward API). For production, map to a **stable**
+#   numeric FROST identifier (e.g., via ConfigMap/Node labels) to avoid churn on IP changes.
+# - `env.JWT_HS256_B64_FILE`: file path for JWT shared secret; switch to JWKS (RS256/EdDSA) for rotation.
+# - `resources`: size per environment; set based on expected signing QPS and latency SLOs.
+# - `image`: pinned by **digest**; update in CI to prevent supply-chain drift.
+#
+# Improvements
+# - Replace shared `frost-tls` with **per-workload** certs: `frost-signer-tls` (SAN pinned to Service).
+# - Use **Node labels/affinity** to ensure spread across ADs/zones and taints/tolerations to isolate.
+# - Mount `emptyDir.medium: Memory` for FROST state to fully avoid on-node persistence.
+# - Expose **/metrics** via ServiceMonitor and add **HPA** or alerts on error budgets / p95 latency.
+# - Switch JWT to public-key verification with strict `aud/iss/exp/nbf` validation.
+#
+# Operational Guidance
+# - Create **NetworkPolicies** to allow only coordinator ↔ signers on FROST RPC ports; deny all else.
+# - Rotate TLS certs via cert-manager; ensure app reloads on secret change (liveness/readiness will recycle if needed).
+# - Consider **PodDisruptionBudget** and **priorityClasses** so signers remain available during maintenance.
+#
+# Production Considerations
+# - Map SIGNER_ID deterministically (e.g., from Node label `frost.signer.id`) to preserve t-of-n sets across reboots.
+# - Avoid shared TLS secret across services; split to signer-only secret and restrict via RBAC.
+# - Enforce image **signature verification** (cosign) and admission control policies.
+# =============================================================================
+
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: frost-signer
+  namespace: frost
+spec:
+  selector:
+    matchLabels:
+      app: frost-signer
+  template:
+    metadata:
+      labels:
+        app: frost-signer
+      annotations:
+        container.apparmor.security.beta.kubernetes.io/signer: runtime/default
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      # (Optional hardening) nodeSelector/affinity/taints to isolate signers:
+      # nodeSelector:
+      #   frost.signer: "true"
+      # tolerations:
+      # - key: "frost-signer"
+      #   operator: "Exists"
+      #   effect: "NoSchedule"
+      containers:
+      - name: signer
+        image: ghcr.io/your-org/frost@sha256:REPLACE_WITH_DIGEST
+        command: ["/usr/local/bin/frost-signer"]
+        env:
+          # PoC: derive SIGNER_ID from node host IP. Prefer a **stable** mapping in production:
+          # e.g., use a Node label frost.signer.id and read via fieldRef/Downward API + projected CM.
+          - name: SIGNER_ID
+            valueFrom:
+              fieldRef:
+                fieldPath: status.hostIP
+          - name: BIND
+            value: "0.0.0.0:7000"
+          - name: FROST_STATE
+            value: "/state"
+          # Read shared secret from file. PROD: switch to RS256/EdDSA key/jwks.
+          - name: JWT_HS256_B64_FILE
+            value: "/jwt/JWT_HS256_B64"
+        ports:
+        - name: signer
+          containerPort: 7000
+        volumeMounts:
+        - name: frost-state
+          mountPath: /state
+        - name: tls
+          mountPath: /tls
+          readOnly: true
+        - name: jwt
+          mountPath: /jwt
+          readOnly: true
+        securityContext:
+          runAsUser: 10001
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+          limits:
+            cpu: "500m"
+            memory: "512Mi"
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 7000
+          initialDelaySeconds: 10
+          periodSeconds: 15
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: 7000
+          initialDelaySeconds: 5
+          periodSeconds: 10
+      volumes:
+      - name: frost-state
+        emptyDir: {}
+        # For stronger anti-persistence:
+        # emptyDir:
+        #   medium: Memory
+      - name: tls
+        secret:
+          secretName: frost-tls    # PROD: use signer-specific secret, e.g., frost-signer-tls
+          items:
+          - key: tls.crt
+            path: tls.crt
+          - key: tls.key
+            path: tls.key
+          - key: ca.crt
+            path: ca.crt
+      - name: jwt
+        secret:
+          secretName: frost-secrets
+          items:
+          - key: JWT_HS256_B64
+            path: JWT_HS256_B64
+
+# =============================================================================
+# (Recommended) NetworkPolicy — only allow coordinator ↔ signer mTLS on 7000/7100
+# Update selectors/ports to match your coordinator Service/Deployment.
+# =============================================================================
+# apiVersion: networking.k8s.io/v1
+# kind: NetworkPolicy
+# metadata:
+#   name: frost-signer-allow-coordinator
+#   namespace: frost
+# spec:
+#   podSelector:
+#     matchLabels:
+#       app: frost-signer
+#   policyTypes: ["Ingress", "Egress"]
+#   ingress:
+#   - from:
+#     - podSelector:
+#         matchLabels:
+#           app: frost-coordinator
+#     ports:
+#     - protocol: TCP
+#       port: 7000
+#   egress:
+#   - to:
+#     - podSelector:
+#         matchLabels:
+#           app: frost-coordinator
+#     ports:
+#     - protocol: TCP
+#       port: 7100
+#   # Deny everything else implicitly (no additional rules)
+# =============================================================================

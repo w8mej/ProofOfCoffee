@@ -1,0 +1,133 @@
+# =============================================================================
+# k8s/frost-networkpolicies.yaml — Least-Privilege Network Policies (documented)
+#
+# Security & Ops
+# - Enforces **default deny** for all pods in the `frost` namespace (both Ingress & Egress).
+# - Allows only the specific coordinator → signer flow on TCP/7000.
+# - Signers have **no egress** (containment); coordinator has egress only to signers.
+# - This mirrors the zero-trust design: coordinator orchestrates FROST, signers respond.
+#
+# Tunables / Config
+# - Ports: change `7000`/`7100` if your services bind differently.
+# - Selectors: match `app` labels from your Deployments/DaemonSets. Keep labels stable.
+# - Add rules for observability (Prometheus scrapes), OPA/ext_authz, or KMS if needed.
+#
+# Operational Guidance
+# - Apply the **default-deny** first; follow with allow-list policies in the same apply.
+# - If pods need to pull images or reach OCI services, add explicit **egress** rules to
+#   the Service/NAT Gateway CIDRs or in-cluster endpoints (e.g., OPA/Envoy).
+# - Use `kubectl describe netpol -n frost` to validate which policies select which pods.
+# - Test connectivity with `netshoot`/`busybox` pods before and after enforcement.
+#
+# Production Considerations
+# - Keep policies **as specific as possible** (namespaceSelector + podSelector) to prevent
+#   lateral movement. Avoid broad ipBlocks when possible.
+# - Consider separate policies for metrics/health, image registry egress, and cert-manager
+#   webhook traffic if those reside in other namespaces.
+# - Version and test policies in CI (e.g., kube-hunter/OPA tests) before rollout.
+# =============================================================================
+
+# 1) Default deny: blocks all Ingress & Egress by default within namespace `frost`.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: frost
+spec:
+  podSelector: {}         # Selects all pods in the namespace
+  policyTypes:
+  - Ingress
+  - Egress
+
+---
+# 2) Signers: allow **only** Ingress from coordinator pods on TCP/7000; deny egress entirely.
+#    This means signers cannot initiate outbound connections (containment).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: signer-allow-from-coordinator
+  namespace: frost
+spec:
+  podSelector:
+    matchLabels:
+      app: frost-signer
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app: frost-coordinator
+    ports:
+    - protocol: TCP
+      port: 7000
+  egress: []  # no egress from signers (deny by default)
+
+---
+# 3) Coordinator: allow Egress to signer pods on TCP/7000; no other egress.
+#    If coordinator must reach OPA/Envoy/KMS, add explicit destinations below.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: coordinator-egress-to-signers
+  namespace: frost
+spec:
+  podSelector:
+    matchLabels:
+      app: frost-coordinator
+  policyTypes:
+  - Egress
+  egress:
+  - to:
+    - podSelector:
+        matchLabels:
+          app: frost-signer
+    ports:
+    - protocol: TCP
+      port: 7000
+
+# -----------------------------------------------------------------------------
+# Examples (commented) — Add targeted exceptions when required
+# -----------------------------------------------------------------------------
+# # Allow Prometheus scrape from monitoring namespace to both coordinator/signers (TCP/metrics)
+# # Adjust port if your /metrics runs on a different port.
+# # apiVersion: networking.k8s.io/v1
+# # kind: NetworkPolicy
+# # metadata:
+# #   name: allow-prometheus-scrape
+# #   namespace: frost
+# # spec:
+# #   podSelector: {}     # or narrow to {app: frost-coordinator}/{app: frost-signer}
+# #   policyTypes: ["Ingress"]
+# #   ingress:
+# #   - from:
+# #     - namespaceSelector:
+# #         matchLabels:
+# #           name: monitoring
+# #     ports:
+# #     - protocol: TCP
+# #       port: 9100
+#
+# # Coordinator egress to OPA ext_authz (if OPA is outside frost namespace)
+# # apiVersion: networking.k8s.io/v1
+# # kind: NetworkPolicy
+# # metadata:
+# #   name: coordinator-egress-opa
+# #   namespace: frost
+# # spec:
+# #   podSelector:
+# #     matchLabels:
+# #       app: frost-coordinator
+# #   policyTypes: ["Egress"]
+# #   egress:
+# #   - to:
+# #     - namespaceSelector:
+# #         matchLabels:
+# #           name: opa
+# #       podSelector:
+# #         matchLabels:
+# #           app: opa
+# #     ports:
+# #     - protocol: TCP
+# #       port: 9191

@@ -1,0 +1,275 @@
+<!doctype html>
+<!--
+web/index.html — Rich WebAuthn Proof of Concept UI
+
+Purpose
+-------
+A zero-dependency browser page that drives:
+  1) WebAuthn credential registration (/webauthn/register/start → /finish),
+  2) WebAuthn assertion (/webauthn/assert/start → /assert),
+  3) "Mint after assert" flow that invokes /mint with the captured assertion.
+
+This page is intended for local proof of concepts and developer ergonomics. In production, you’d
+wrap it into your portal app with CSRF/mTLS/headers hardening and a stricter RP policy.
+
+Security & Ops
+--------------
+- Origin/RP Binding: The back end enforces RP ID and origin; this page simply forwards
+  values returned by the server. Ensure WEBAUTHN_RP_ID/WEBAUTHN_ORIGIN are set correctly.
+- Challenge Handling: Challenges are generated server-side; this page never reuses them.
+- Replay/Anti-clone: The server should track sign_count and reject replays; this page logs responses only.
+- Headers & Tokens: This page never stores tokens in localStorage; it prints responses for copy-paste only.
+- CSP: If hosted, add a tight Content-Security-Policy and disable inline scripts or nonce them.
+
+Tunable / Config
+----------------
+- Endpoints: Relative paths (/webauthn/* and /mint). If you front via Envoy, ensure routes are exposed.
+- Scopes/TTL defaults are editable in the “Mint a token” section UI.
+- “Mint after assert” toggles are wired; adjust body as needed to pass approvals/attestations.
+
+Production Considerations
+-------------------------
+- Error UX: Replace <textarea> logs with structured toast/errors and telemetry.
+- Attestation: For strong device attestation, set attestation="direct" at registration and verify the AA root/MDS server-side.
+- CSRF & SameSite: If you switch to cookie auth, add CSRF tokens and strict SameSite settings.
+- i18n/accessibility: Add ARIA roles and focus management; current page uses simple labels/IDs.
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>WebAuthn Proof of Coffee — Zero-Trust Minting PoC</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 2rem; }
+    h1 { font-size: 1.4rem; }
+    label { display:block; margin:.5rem 0 .25rem }
+    input, button, textarea { font-size: 1rem; padding:.5rem; }
+    button { margin:.25rem 0; cursor:pointer; }
+    .row { display:flex; gap:1rem; align-items:center; flex-wrap:wrap; }
+    .card { border:1px solid #ddd; border-radius:12px; padding:1rem; margin:1rem 0; box-shadow:0 2px 6px rgba(0,0,0,0.05); }
+    textarea { width:100%; height:120px; }
+    code { background:#f6f8fa; padding:.2rem .4rem; border-radius:6px; }
+  </style>
+</head>
+<body>
+  <h1>WebAuthn Proof of Coffee — Zero-Trust Minting PoC</h1>
+
+  <!-- Registration card: navigator.credentials.create -->
+  <div class="card">
+    <h2>Register a Passkey</h2>
+    <label>Username</label>
+    <input id="reg-username" placeholder="alice@example.com" />
+    <div class="row">
+      <button id="btn-start-reg">Start Registration</button>
+      <button id="btn-finish-reg" disabled>Finish Registration</button>
+    </div>
+    <textarea id="reg-log" placeholder="Logs..."></textarea>
+  </div>
+
+  <!-- Assertion card: navigator.credentials.get -->
+  <div class="card">
+    <h2>Assert (Login)</h2>
+    <label>Username</label>
+    <input id="assert-username" placeholder="alice@example.com" />
+    <div class="row">
+      <button id="btn-start-assert">Start Assertion</button>
+      <button id="btn-finish-assert" disabled>Finish Assertion</button>
+    </div>
+    <textarea id="assert-log" placeholder="Logs..."></textarea>
+  </div>
+
+  <!-- Mint card: calls /mint with the captured assertion -->
+  <div class="card">
+    <h2>Mint a token (after assert)</h2>
+    <div class="row">
+      <label>Role</label>
+      <input id="mint-role" value="engineer" />
+      <label>Scopes (comma-separated)</label>
+      <input id="mint-scopes" value="read:logs,write:staging" style="min-width:320px" />
+      <label>TTL (seconds)</label>
+      <input id="mint-ttl" type="number" value="900" style="width:120px" />
+    </div>
+    <div class="row">
+      <button id="btn-mint" disabled>Mint with WebAuthn assertion</button>
+    </div>
+    <textarea id="mint-log" placeholder="Mint output..."></textarea>
+    <p style="font-size:.9rem;color:#555">
+      Note: server policy and approval thresholds apply. For PoC, set <code>APPROVAL_THRESHOLD=0</code> or provide approvals.
+    </p>
+  </div>
+
+<script>
+// ----------------------------- base64url helpers ---------------------------------
+// WebAuthn works with ArrayBuffers; encode/decode to base64url for transport.
+const b64u = {
+  enc: (buf) =>
+    btoa(String.fromCharCode(...new Uint8Array(buf)))
+      .replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,''),
+  dec: (str) =>
+    Uint8Array.from(atob(str.replace(/-/g,'+').replace(/_/g,'/')), c => c.charCodeAt(0))
+};
+
+// Append logs to textarea and keep it scrolled to bottom.
+function log(el, ...args){
+  el.value += args.map(a=> (typeof a==='string'?a:JSON.stringify(a,null,2))).join(' ') + "\n";
+  el.scrollTop = el.scrollHeight;
+}
+
+// ----------------------------- Registration flow --------------------------------
+const regUser = document.getElementById('reg-username');
+const regLog = document.getElementById('reg-log');
+const btnStartReg = document.getElementById('btn-start-reg');
+const btnFinishReg = document.getElementById('btn-finish-reg');
+let regOpts = null;
+
+btnStartReg.onclick = async () => {
+  const username = regUser.value.trim();
+  if(!username) return alert('Enter username');
+  // Ask backend for creation options (contains rpId + challenge)
+  const r = await fetch('/webauthn/register/start', {
+    method:'POST',
+    headers:{'content-type':'application/json'},
+    body: JSON.stringify({username})
+  });
+  const data = await r.json();
+  log(regLog, 'start:', data);
+
+  // Construct WebAuthn PublicKeyCredentialCreationOptions
+  regOpts = {
+    publicKey: {
+      challenge: b64u.dec(data.challenge),
+      rp: { id: data.rpId, name: data.rpId },
+      user: { id: b64u.dec(data.user.id), name: data.user.name, displayName: data.user.name },
+      pubKeyCredParams: data.pubKeyCredParams, // [-7] ES256 in PoC; adjust for passkey platform support
+      timeout: data.timeout,
+      attestation: data.attestation // "none" in PoC; set "direct" + MDS server-side in prod
+    }
+  };
+  btnFinishReg.disabled = false;
+};
+
+btnFinishReg.onclick = async () => {
+  if(!regOpts) return;
+  try {
+    // Ask authenticator to create a new credential
+    const cred = await navigator.credentials.create(regOpts);
+    // Base64url encode binary responses for transport
+    const attObj = b64u.enc(cred.response.attestationObject);
+    const clientData = b64u.enc(cred.response.clientDataJSON);
+    const username = regUser.value.trim();
+    // Finish registration (server persists public key and sign_count)
+    const r = await fetch('/webauthn/register/finish', {
+      method:'POST',
+      headers:{'content-type':'application/json'},
+      body: JSON.stringify({username, attestationObject: attObj, clientDataJSON: clientData})
+    });
+    const data = await r.json();
+    log(regLog, 'finish:', data);
+  } catch(e){
+    log(regLog, 'error:', String(e));
+  }
+};
+
+// ----------------------------- Assertion flow -----------------------------------
+const assertUser = document.getElementById('assert-username');
+const assertLog = document.getElementById('assert-log');
+const btnStartAssert = document.getElementById('btn-start-assert');
+const btnFinishAssert = document.getElementById('btn-finish-assert');
+let assertOpts = null;
+let lastAssertion = null;
+
+btnStartAssert.onclick = async () => {
+  const username = assertUser.value.trim();
+  if(!username) return alert('Enter username');
+
+  // Ask backend for assertion options (rpId + challenge + allowCredentials)
+  const r = await fetch('/webauthn/assert/start', {
+    method:'POST',
+    headers:{'content-type':'application/json'},
+    body: JSON.stringify({username})
+  });
+  const data = await r.json();
+  log(assertLog, 'start:', data);
+
+  // Build PublicKeyCredentialRequestOptions
+  assertOpts = {
+    publicKey: {
+      challenge: b64u.dec(data.challenge),
+      rpId: data.rpId,
+      allowCredentials: (data.allowCredentials || []).map(c => ({
+        type:'public-key', id: b64u.dec(c.id)
+      })),
+      timeout: data.timeout,
+      userVerification: 'preferred'
+    }
+  };
+  btnFinishAssert.disabled = false;
+};
+
+btnFinishAssert.onclick = async () => {
+  if(!assertOpts) return;
+  try {
+    // Ask authenticator to sign the challenge
+    const cred = await navigator.credentials.get(assertOpts);
+    const rawId = b64u.enc(cred.rawId);
+    const authData = b64u.enc(cred.response.authenticatorData);
+    const clientData = b64u.enc(cred.response.clientDataJSON);
+    const sig = b64u.enc(cred.response.signature);
+    const username = assertUser.value.trim();
+
+    // Send assertion to server for verification
+    const r = await fetch('/webauthn/assert', {
+      method:'POST',
+      headers:{'content-type':'application/json'},
+      body: JSON.stringify({username, rawId: rawId, authenticatorData: authData, clientDataJSON: clientData, signature: sig})
+    });
+    const data = await r.json();
+    log(assertLog, 'assert:', data);
+
+    // Remember assertion for "mint after assert"
+    lastAssertion = { rawId, authenticatorData: authData, clientDataJSON: clientData, signature: sig };
+    document.getElementById('btn-mint').disabled = false;
+  } catch(e){
+    log(assertLog, 'error:', String(e));
+  }
+};
+
+// ----------------------------- Mint after assert --------------------------------
+// Sends the captured assertion along with role/scopes/ttl to /mint.
+const btnMint = document.getElementById('btn-mint');
+const mintLog = document.getElementById('mint-log');
+const mintRole = document.getElementById('mint-role');
+const mintScopes = document.getElementById('mint-scopes');
+const mintTtl = document.getElementById('mint-ttl');
+
+btnMint.onclick = async () => {
+  if(!lastAssertion) return alert('Run assertion first');
+  const username = assertUser.value.trim();
+
+  const body = {
+    user: username,
+    role: mintRole.value.trim() || "engineer",
+    scopes: mintScopes.value.split(',').map(s => s.trim()).filter(Boolean),
+    ttl_seconds: parseInt(mintTtl.value || "900", 10),
+    auth_method: "webauthn",
+    webauthn_assertion: lastAssertion
+    // Optional approvals/attestation bundle may be added here:
+    // approvals: [...],
+    // attestation: {...}
+  };
+
+  try {
+    const r = await fetch('/mint', {
+      method:'POST',
+      headers:{'content-type':'application/json'},
+      body: JSON.stringify(body)
+    });
+    const data = await r.json();
+    log(mintLog, data);
+  } catch(e){
+    log(mintLog, 'error:', String(e));
+  }
+};
+</script>
+</body>
+</html>

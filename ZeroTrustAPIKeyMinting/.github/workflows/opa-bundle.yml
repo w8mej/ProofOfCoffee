@@ -1,0 +1,33 @@
+permissions:
+  contents: read
+  packages: write   # only where image push is required; remove in workflows that don't push
+  
+name: opa-bundle
+on:
+  push:
+    branches: ["poc", "poc/**"]
+    paths:
+      - "policy/**"
+  pull_request:
+    branches: ["poc", "poc/**"]
+    paths:
+      - "policy/**"
+jobs:
+  build-opa-bundle:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install OPA
+        run: |
+          curl -L -o opa https://openpolicyagent.org/downloads/latest/opa_linux_amd64
+          chmod +x opa
+          sudo mv opa /usr/local/bin/opa
+      - name: Run policy tests
+        run: opa test policy/ -v
+      - name: Build bundle
+        run: mkdir -p policy/bundle && opa build policy/ -o policy/bundle/policy.tar.gz
+      - name: Upload bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: opa-bundle
+          path: policy/bundle/policy.tar.gz

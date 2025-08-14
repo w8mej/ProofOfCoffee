@@ -1,0 +1,179 @@
+# =============================================================================
+# certs/cert-manager-bootstrap.yaml — Cluster PKI for FROST mTLS (documented)
+#
+# Security & Ops
+# - Bootstraps a private cluster CA for **mTLS** between coordinator ↔ signers
+#   (and Envoy/OPA as needed).
+# - Uses a temporary **self-signed ClusterIssuer** only to mint the root CA once,
+#   then promotes that CA via `frost-ca-issuer` for all leaf cert issuance.
+# - Root CA secret (`frost-root-ca`) is stored in the `cert-manager` namespace.
+#   **RBAC MUST restrict** read access to the cert-manager controller only.
+# - Prefer **short-lived leaf certs** (days, not months) with auto-rotation.
+#
+# Tunables / Config
+# - Root key algo/size: `ECDSA P-256` (here). Consider `P-384` for stricter envs.
+# - Root CA lifetime: `duration: 900 days`, `renewBefore: 30 days` (adjust to policy).
+# - Issuer names: `selfsigned-bootstrap` → `frost-ca-issuer` (referenced by leaf certs).
+#
+# Improvements
+# - Replace in-cluster self-signed root with an **offline root CA**; keep only an
+#   **intermediate** CA in-cluster for day-2 operations and compromise blast-radius reduction.
+# - Store CA secrets using **KMS-backed secret encryption** (enable K8s encryption-at-rest),
+#   or use an external secrets provider/CSI.
+# - Add monitoring for expiration windows and reconcile alerts on renewal failures.
+#
+# Operational Guidance
+# - **RBAC**: lock down `secrets/frost-root-ca`:
+#     • Only cert-manager SA should have `get` access; nobody should have `list` in ns.
+# - **Rotation**:
+#     1) Create new root or intermediate → 2) create new issuer → 3) issue new leafs
+#        with overlapping trust → 4) switch trust → 5) retire old.
+# - **Verification**:
+#     • Servers mount `<service>-tls` (tls.crt/tls.key).
+#     • Clients trust `ca.crt` from root/intermediate bundle; pin SANs (service DNS).
+# - **Auditing**:
+#     • Emit cert issuance events to cluster logging; retain with WORM where required.
+#
+# Production Considerations
+# - Use **private** control plane/endpoints; pair with NetworkPolicies to confine
+#   traffic strictly to coordinator ↔ signers paths.
+# - Consider **SPIFFE IDs** (SPIRE) or SAN pinning in certs for stronger workload identity.
+# - Keep leaf `duration` short (7–30 days) and ensure cert-manager readiness/alerts so
+#   rotation is invisible to apps.
+# - Back up the root (if in-cluster) to a secure, offline location; test restore.
+# =============================================================================
+
+# 1) Temporary ClusterIssuer to self-sign the initial root CA.
+#    Lifecycle: create → mint root CA → (optionally) delete after promoting CA issuer.
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: selfsigned-bootstrap
+  labels:
+    app.kubernetes.io/name: cert-bootstrap
+    app.kubernetes.io/component: root-bootstrap
+spec:
+  selfSigned: {}
+
+---
+# 2) Root CA Certificate — produces Secret `frost-root-ca` in the cert-manager ns.
+#    Secret keys:
+#      - tls.crt (CA certificate)
+#      - tls.key (CA private key)  ← protect with RBAC + encryption at rest
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: frost-root-ca
+  namespace: cert-manager
+  labels:
+    app.kubernetes.io/name: frost-ca
+    app.kubernetes.io/component: root
+spec:
+  isCA: true
+  commonName: frost-root-ca
+  secretName: frost-root-ca
+  privateKey:
+    algorithm: ECDSA       # Tunable: ECDSA (P-256 here). Consider P-384 in high-assurance envs.
+    size: 256
+    rotationPolicy: Always # Rotate private key upon renewal
+  duration: 21600h         # ~900 days (root). Use your PKI policy.
+  renewBefore: 720h        # 30 days before expiry; alert earlier via monitoring.
+  issuerRef:
+    name: selfsigned-bootstrap
+    kind: ClusterIssuer
+
+---
+# 3) Promote the minted CA to a reusable ClusterIssuer.
+#    All leaf Certificates for services should reference this issuer (`issuerRef.name: frost-ca-issuer`).
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: frost-ca-issuer
+  labels:
+    app.kubernetes.io/name: frost-ca
+    app.kubernetes.io/component: issuer
+spec:
+  ca:
+    secretName: frost-root-ca
+
+# -----------------------------------------------------------------------------
+# EXAMPLES (COMMENTED) — Leaf certs for services (short-lived, auto-rotated)
+# -----------------------------------------------------------------------------
+# apiVersion: cert-manager.io/v1
+# kind: Certificate
+# metadata:
+#   name: frost-signer-cert
+#   namespace: frost
+# spec:
+#   secretName: frost-signer-tls
+#   duration: 168h            # 7 days; rotate frequently
+#   renewBefore: 24h
+#   commonName: frost-signer.frost.svc
+#   dnsNames:
+#     - frost-signer.frost.svc
+#     - frost-signer.frost.svc.cluster.local
+#   privateKey:
+#     algorithm: ECDSA
+#     size: 256
+#     rotationPolicy: Always
+#   issuerRef:
+#     name: frost-ca-issuer
+#     kind: ClusterIssuer
+#
+# apiVersion: cert-manager.io/v1
+# kind: Certificate
+# metadata:
+#   name: frost-coordinator-cert
+#   namespace: frost
+# spec:
+#   secretName: frost-coordinator-tls
+#   duration: 168h
+#   renewBefore: 24h
+#   commonName: frost-coordinator.frost.svc
+#   dnsNames:
+#     - frost-coordinator.frost.svc
+#     - frost-coordinator.frost.svc.cluster.local
+#   privateKey:
+#     algorithm: ECDSA
+#     size: 256
+#     rotationPolicy: Always
+#   issuerRef:
+#     name: frost-ca-issuer
+#     kind: ClusterIssuer
+#
+# -----------------------------------------------------------------------------
+# RBAC (COMMENTED) — Restrict read access to the root CA secret
+# -----------------------------------------------------------------------------
+# apiVersion: rbac.authorization.k8s.io/v1
+# kind: Role
+# metadata:
+#   namespace: cert-manager
+#   name: read-frost-root-ca
+# rules:
+#   - apiGroups: [""]
+#     resources: ["secrets"]
+#     resourceNames: ["frost-root-ca"]
+#     verbs: ["get"]   # No list/watch to avoid broad secret exposure
+#
+# ---
+# apiVersion: rbac.authorization.k8s.io/v1
+# kind: RoleBinding
+# metadata:
+#   namespace: cert-manager
+#   name: frost-root-ca-to-cert-manager
+# subjects:
+#   - kind: ServiceAccount
+#     name: cert-manager
+#     namespace: cert-manager
+# roleRef:
+#   apiGroup: rbac.authorization.k8s.io
+#   kind: Role
+#   name: read-frost-root-ca
+#
+# -----------------------------------------------------------------------------
+# NOTES
+# - Use NetworkPolicies to restrict pod-to-pod traffic so only coordinator ↔ signers
+#   can connect over mTLS; mount the right client/server certs and CA bundle.
+# - Consider SPIFFE (SPIRE) for SVID issuance with cert-manager using spiffe cert templates.
+# - Ensure cluster secret encryption-at-rest is enabled with a strong KMS key.
+# -----------------------------------------------------------------------------

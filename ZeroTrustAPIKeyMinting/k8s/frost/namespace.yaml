@@ -1,0 +1,38 @@
+# =============================================================================
+# k8s/frost-namespace.yaml — Frost Namespace Definition
+#
+# Purpose
+# - Create a dedicated Kubernetes namespace `frost` to logically isolate all
+#   FROST-related resources (signers, coordinator, secrets, policies, limits).
+#
+# Security & Ops Notes
+# - Namespaces provide a basic security boundary for RBAC, NetworkPolicies,
+#   and resource constraints (LimitRanges, ResourceQuotas).
+# - Secrets (TLS certs, JWT keys) and ConfigMaps scoped to this namespace are
+#   inaccessible to workloads outside unless explicitly allowed.
+# - Enables fine-grained monitoring, logging, and audit policy targeting.
+#
+# Operational Guidance
+# - Apply Namespace before any other manifests (LimitRanges, Deployments, etc.).
+# - Tag namespace with appropriate labels/annotations for:
+#   - Cost allocation
+#   - Pod Security Admission profiles (baseline/restricted)
+#   - Backup/restore tooling
+# - Use `kubectl get all -n frost` to monitor namespace workloads.
+#
+# Production Considerations
+# - Enforce namespace-specific NetworkPolicies to restrict pod-to-pod traffic.
+# - Apply Pod Security Admission labels or OPA/Gatekeeper constraints.
+# - Namespace deletion will remove **all** resources inside; restrict delete permissions.
+# =============================================================================
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: frost
+  labels:
+    app.kubernetes.io/name: frost
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/audit-version: latest

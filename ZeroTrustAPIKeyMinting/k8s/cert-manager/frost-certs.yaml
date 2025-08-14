@@ -1,0 +1,122 @@
+# =============================================================================
+# certs/frost-shared-tls.yaml — Leaf TLS Certificate for FROST mTLS (documented)
+#
+# Security & Ops
+# - Issues a single **shared** mTLS cert/secret (`frost-tls`) for both coordinator and
+#   signer services (PoC convenience). This enables mutual TLS between services using
+#   the same trust chain (issuer: frost-ca-issuer).
+# - **Production Warning**: Do NOT share keys between workloads. Generate **separate**
+#   certificates and secrets per workload/namespace with distinct SANs and RBAC.
+# - Key rotation is enabled (`rotationPolicy: Always`) with a 90-day lifetime and
+#   15-day renewal window. Shorten lifetimes (7–30 days) for higher assurance.
+#
+# Tunables / Config
+# - `duration` / `renewBefore`: Adjust to meet rotation SLOs and maintenance windows.
+# - `privateKey.algorithm/size`: ECDSA P-256 here; consider P-384 for stricter reqs.
+# - `usages`: includes **server auth** and **client auth** for mTLS. Remove what you
+#   don’t need to minimize misuse. (digitalSignature/keyEncipherment typical)
+# - `dnsNames`: SANs must include the **exact** service DNS used by clients.
+# - `issuerRef`: references the cluster CA (`frost-ca-issuer`) minted earlier.
+#
+# Improvements
+# - Replace with **per-workload** certs (e.g., frost-signer-tls, frost-coordinator-tls).
+# - Add **Name Constraints** or SPIFFE IDs if using SPIRE; pin SANs in clients.
+# - Use **short-lived** leafs (e.g., 7–30 days) and ensure cert-manager alerts/HA.
+#
+# Operational Guidance
+# - RBAC: restrict read access to `Secret/frost-tls` to only the namespaces/pods that
+#   require it. Avoid mounting the same secret in multiple deployments across namespaces.
+# - Rollouts: ensure your Deployments watch the Secret and reload on rotation (either
+#   with sidecars, liveness reload, or app support).
+# - NetworkPolicies: allow only coordinator ↔ signer traffic on the mTLS ports; deny all else.
+# - Audit: emit events for issuance/renewal and alert if `renewBefore` window is reached
+#   without successful rotation.
+#
+# Production Considerations
+# - Separate certs per service; different Secrets and SANs; ideally different namespaces.
+# - Enforce **private keys non-exportability** via runtime policy (apps never log keys).
+# - Consider **intermediate CA** in-cluster and **offline root**; enable K8s secret
+#   encryption-at-rest via KMS.
+# =============================================================================
+
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: frost-tls
+  namespace: frost
+  labels:
+    app.kubernetes.io/name: frost
+    app.kubernetes.io/component: mTLS
+spec:
+  secretName: frost-tls
+  duration: 2160h    # 90 days — PoC. Prefer 7–30 days in production.
+  renewBefore: 360h  # Renew 15 days before expiry (alert if renewal fails)
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always
+  usages:
+    - digital signature
+    - key encipherment
+    - server auth
+    - client auth
+  subject:
+    organizationalUnits: ["frost"]
+  # SANs used by clients/peers; must match the k8s Service DNS names in-cluster.
+  dnsNames:
+    - frost-signer.frost.svc
+    - frost-signer.frost.svc.cluster.local
+    - frost-coordinator.frost.svc
+    - frost-coordinator.frost.svc.cluster.local
+  issuerRef:
+    name: frost-ca-issuer
+    kind: ClusterIssuer
+
+# -----------------------------------------------------------------------------
+# Recommended Production Layout (examples; not applied here)
+# -----------------------------------------------------------------------------
+# apiVersion: cert-manager.io/v1
+# kind: Certificate
+# metadata:
+#   name: frost-signer-tls
+#   namespace: frost
+# spec:
+#   secretName: frost-signer-tls
+#   duration: 168h
+#   renewBefore: 24h
+#   dnsNames:
+#     - frost-signer.frost.svc
+#     - frost-signer.frost.svc.cluster.local
+#   privateKey:
+#     algorithm: ECDSA
+#     size: 256
+#     rotationPolicy: Always
+#   issuerRef:
+#     name: frost-ca-issuer
+#     kind: ClusterIssuer
+#
+# ---
+# apiVersion: cert-manager.io/v1
+# kind: Certificate
+# metadata:
+#   name: frost-coordinator-tls
+#   namespace: frost
+# spec:
+#   secretName: frost-coordinator-tls
+#   duration: 168h
+#   renewBefore: 24h
+#   dnsNames:
+#     - frost-coordinator.frost.svc
+#     - frost-coordinator.frost.svc.cluster.local
+#   privateKey:
+#     algorithm: ECDSA
+#     size: 256
+#     rotationPolicy: Always
+#   issuerRef:
+#     name: frost-ca-issuer
+#     kind: ClusterIssuer
+#
+# Pair with NetworkPolicies that only allow:
+#   - coordinator pods → signer pods on FROST RPC ports (mTLS)
+#   - deny all other cross-namespace traffic
+# And ensure Deployments reload certificates on secret rotation.

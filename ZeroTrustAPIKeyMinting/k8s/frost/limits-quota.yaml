@@ -1,0 +1,64 @@
+# =============================================================================
+# k8s/frost-namespace-limits.yaml — Default Limits & Quotas for Frost namespace
+#
+# Purpose
+# - Enforce **baseline resource requests/limits** on all containers in the `frost` namespace.
+# - Prevent noisy-neighbor issues and accidental over-provisioning.
+# - Cap total compute & memory usage at namespace level.
+#
+# Security & Ops Notes
+# - **LimitRange** ensures that any Pod without explicit requests/limits will
+#   default to the values below, preventing unbounded scheduling.
+# - **ResourceQuota** enforces hard ceilings for the namespace — helps with
+#   capacity planning and avoiding DoS from runaway workloads.
+# - These constraints are tuned for a PoC; in production, adjust based on:
+#   - FROST signer & coordinator CPU/memory profiles
+#   - Node pool sizing
+#   - Concurrency requirements & failover strategy
+#
+# Tunables
+# - `default` / `defaultRequest` in LimitRange: set to minimum guaranteed and
+#   maximum expected per container.
+# - `hard` in ResourceQuota: sum of all workloads + buffer for surge during
+#   rolling updates.
+#
+# Operational Guidance
+# - Review usage via `kubectl top pod -n frost` or Metrics Server.
+# - Adjust quota before scaling signers/coordinator.
+# - Alerts: set triggers when usage nears 80% of quota.
+# - For mixed workloads in same namespace, consider multiple LimitRanges scoped
+#   by label selectors (requires ResourceQuotaScopeSelector).
+#
+# Production Considerations
+# - Size defaults to match actual observed baseline usage; avoid starving workloads.
+# - Coordinate with cluster autoscaler settings so quota limits don’t block scaling.
+# - Periodically revisit quotas after load tests or traffic changes.
+# =============================================================================
+
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: frost-defaults
+  namespace: frost
+spec:
+  limits:
+  - type: Container
+    default:
+      cpu: "500m"
+      memory: "512Mi"
+    defaultRequest:
+      cpu: "100m"
+      memory: "128Mi"
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: frost-quota
+  namespace: frost
+spec:
+  hard:
+    requests.cpu: "4"
+    requests.memory: "8Gi"
+    limits.cpu: "8"
+    limits.memory: "16Gi"
+    pods: "50"
