@@ -8,3 +8,6 @@ resource "vault_kv_secret_v2" "api_key" {
     key = "super-secret-api-key-123"
   })
 }
+
+
+

@@ -19,6 +19,7 @@
 resource "oci_functions_application" "app" {
   compartment_id = var.compartment_id
   display_name   = "yubi-secure-app" # Human-friendly app name for OCI Console.
+  subnet_ids     = var.subnet_ids
 }
 
 # Deploy the actual OCI Function.
@@ -31,7 +32,8 @@ resource "oci_functions_function" "fn" {
 
   # Environment variables passed into the running function.
   # Here, we inject a Vault-issued TLS cert + private key at deploy time.
-  config {
+  # ✅ config is a MAP, not a block
+  config = {
     TLS_CERT = vault_pki_secret_backend_cert.function_cert.certificate
     TLS_KEY  = vault_pki_secret_backend_cert.function_cert.private_key
   }
