@@ -47,9 +47,19 @@ resource "aws_s3_bucket_versioning" "v" {
 # Lifecycle: transition objects to Glacier IR immediately
 resource "aws_s3_bucket_lifecycle_configuration" "glacier" {
   bucket = aws_s3_bucket.audit.id
+
   rule {
     id     = "archive-immediately"
     status = "Enabled"
-    transition { days = 0 storage_class = "GLACIER_IR" }
+
+    # Apply to all objects in the bucket
+    filter {
+      prefix = ""
+    }
+
+    transition {
+      days          = 0
+      storage_class = "GLACIER_IR"
+    }
   }
 }

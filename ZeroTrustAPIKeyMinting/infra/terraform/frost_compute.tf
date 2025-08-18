@@ -72,8 +72,8 @@ resource "oci_core_instance" "frost_keygen" {
     is_pv_encryption_in_transit_enabled = true # CKV_OCI_4
   }
 
-  metadata_service {
-    are_legacy_imds_endpoints_disabled = true # CKV_OCI_5
+  instance_options {
+    are_legacy_imds_endpoints_disabled = true
   }
 
   source_details {
@@ -117,8 +117,8 @@ resource "oci_core_instance" "frost_signer" {
     is_pv_encryption_in_transit_enabled = true # CKV_OCI_4
   }
 
-  metadata_service {
-    are_legacy_imds_endpoints_disabled = true # CKV_OCI_5
+  instance_options {
+    are_legacy_imds_endpoints_disabled = true
   }
 
   source_details {

@@ -88,7 +88,7 @@ resource "oci_core_instance" "cvm" {
   }
 
   # Disable legacy metadata service (IMDS v1) (Checkov: CKV_OCI_5)
-  metadata_service {
+  instance_options {
     are_legacy_imds_endpoints_disabled = true
   }
 

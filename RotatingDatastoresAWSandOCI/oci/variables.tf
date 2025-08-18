@@ -15,17 +15,55 @@
 # - Change default secret names to match your naming conventions.
 # - Split variables by environment (dev/stage/prod) with tfvars files.
 ##########################################
+variable "name" {
+  type    = string
+  default = "rotator"
+}
 
-variable "name" { type = string default = "rotator" }
+variable "subnet_ocid" {
+  type = string
+} # Private subnet for Functions app (egress required)
 
-variable "compartment_ocid" { type = string }  # Target compartment for all OCI resources
-variable "subnet_ocid"      { type = string }  # Private subnet for Functions app (egress required)
-variable "ocir_image_uri"   { type = string }  # phx.ocir.io/<ns>/rotator:<tag>
-variable "os_namespace"     { type = string }  # Object Storage namespace
+variable "ocir_image_uri" {
+  type = string
+} # phx.ocir.io/<ns>/rotator:<tag>
 
-variable "oci_secret_name"            { type = string default = "multi-cloud/app_user" }
-variable "oci_conn_blob_secret_name"  { type = string default = "multi-cloud/app_connection_blob" }
+variable "os_namespace" {
+  type = string
+} # Object Storage namespace
+
+variable "oci_secret_name" {
+  type    = string
+  default = "multi-cloud/app_user"
+}
+
+variable "oci_conn_blob_secret_name" {
+  type    = string
+  default = "multi-cloud/app_connection_blob"
+}
+
+
+variable "compartment_ocid" {
+  type = string
+  validation {
+    condition     = startswith(var.compartment_ocid, "ocid1.")
+    error_message = "compartment_ocid must start with 'ocid1.'."
+  }
+}
 
 # AWS ARNs passed to the worker so it can read/write local AWS Secrets Manager (latency-friendly)
-variable "aws_secret_id"          { type = string }  # ARN, for worker env (credentials secret)
-variable "aws_conn_blob_secret_id"{ type = string }  # ARN, for worker env (connection blob secret)
+variable "aws_secret_id" {
+  type = string
+  validation {
+    condition     = can(regex("^arn:aws:secretsmanager:[a-z0-9-]+:\\d{12}:secret:.+$", var.aws_secret_id))
+    error_message = "aws_secret_id must be a valid Secrets Manager ARN."
+  }
+}
+
+variable "aws_conn_blob_secret_id" {
+  type = string
+  validation {
+    condition     = can(regex("^arn:aws:secretsmanager:[a-z0-9-]+:\\d{12}:secret:.+$", var.aws_conn_blob_secret_id))
+    error_message = "aws_conn_blob_secret_id must be a valid Secrets Manager ARN."
+  }
+}

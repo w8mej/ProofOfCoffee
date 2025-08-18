@@ -36,7 +36,11 @@
 data "aws_iam_policy_document" "lambda_trust" {
   statement {
     actions = ["sts:AssumeRole"]
-    principals { type = "Service" identifiers = ["lambda.amazonaws.com"] }
+
+    principals {
+      type        = "Service"
+      identifiers = ["lambda.amazonaws.com"]
+    }
   }
 }
 
@@ -51,8 +55,8 @@ data "aws_iam_policy_document" "lambda_policy" {
   # Secrets Manager permissions – restricted to two specific secrets and their versions
   statement {
     actions = [
-      "secretsmanager:GetSecretValue","secretsmanager:PutSecretValue",
-      "secretsmanager:DescribeSecret","secretsmanager:UpdateSecretVersionStage"
+      "secretsmanager:GetSecretValue", "secretsmanager:PutSecretValue",
+      "secretsmanager:DescribeSecret", "secretsmanager:UpdateSecretVersionStage"
     ]
     resources = [
       aws_secretsmanager_secret.app_user.arn, "${aws_secretsmanager_secret.app_user.arn}:*",
@@ -62,13 +66,13 @@ data "aws_iam_policy_document" "lambda_policy" {
 
   # S3 permissions – write-only access to audit bucket objects
   statement {
-    actions   = ["s3:PutObject","s3:AbortMultipartUpload"]
+    actions   = ["s3:PutObject", "s3:AbortMultipartUpload"]
     resources = ["${aws_s3_bucket.audit.arn}/*"]
   }
 
   # CloudWatch Logs permissions – unrestricted resource scope (service requirement)
   statement {
-    actions   = ["logs:CreateLogGroup","logs:CreateLogStream","logs:PutLogEvents"]
+    actions   = ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"]
     resources = ["*"]
   }
 }

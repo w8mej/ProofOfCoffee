@@ -20,6 +20,14 @@ on:
   pull_request:
     branches: [ "poc" ]
 
+
+# ✅ Least-privilege token for the whole workflow (satisfies CKV2_GHA_1)
+permissions:
+  contents: read       # checkout needs only read
+  # Add more only if needed:
+  # id-token: write    # enable if using OIDC to push images / fetch cloud creds
+  # packages: write    # enable if pushing to GHCR
+  # actions: read
 jobs:
   build-and-test:
     runs-on: ubuntu-latest

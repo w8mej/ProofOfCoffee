@@ -110,9 +110,14 @@ resource "oci_core_security_list" "oke_sl" {
 
   # Ingress: all TCP from RFC1918 /8 (PoC). Tighten in production (see below).
   ingress_security_rules {
-    protocol = "6"
+    protocol = "6" # TCP
     source   = "10.0.0.0/8"
-    tcp_options { min = 1 max = 65535 }
+
+    tcp_options {
+      min = 1
+      max = 65535
+    }
+
     description = "PoC: allow all TCP from 10.0.0.0/8. Replace with NSG/explicit ports in production."
   }
 

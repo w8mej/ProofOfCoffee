@@ -83,14 +83,14 @@ resource "aws_kms_key" "demo" {
         Sid       = "Allow access to the key"
         Effect    = "Allow"
         Principal = { AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/some-iam-role" }
-        Action    = [
+        Action = [
           "kms:Encrypt",
           "kms:Decrypt",
           "kms:ReEncrypt*",
           "kms:GenerateDataKey*",
           "kms:DescribeKey"
         ]
-        Resource  = "*"
+        Resource = "*"
       }
     ]
   })
@@ -281,12 +281,23 @@ resource "aws_s3_bucket_replication_configuration" "demo" {
 resource "aws_s3_bucket_lifecycle_configuration" "demo_dest" {
   provider = aws.dest
   bucket   = aws_s3_bucket.demo_dest.id
+
   rule {
     id     = "default-lifecycle"
     status = "Enabled"
-    abort_incomplete_multipart_upload { days_after_initiation = 7 }
-    transition { days = 30, storage_class = "STANDARD_IA" }
-    noncurrent_version_expiration { noncurrent_days = 365 }
+
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 7
+    }
+
+    transition {
+      days          = 30
+      storage_class = "STANDARD_IA"
+    }
+
+    noncurrent_version_expiration {
+      noncurrent_days = 365
+    }
   }
 }
 

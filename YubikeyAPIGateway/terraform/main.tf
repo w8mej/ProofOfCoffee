@@ -41,8 +41,8 @@ resource "null_resource" "hash_key" {
 #    - Used later by API services to verify client-provided keys
 #    - No usable plaintext API key is ever stored here
 resource "vault_kv_secret_v2" "api_hash" {
-  mount     = "kv"
-  name      = "api/keys/${var.app_name}"
+  mount = "kv"
+  name  = "api/keys/${var.app_name}"
   data_json = jsonencode({
     sha256_b64 = trimspace(file("${path.module}/api_key.sha256.b64"))
   })
@@ -58,27 +58,35 @@ resource "null_resource" "wrap_for_yubikey" {
     client_pub_pem = var.client_pub_pem
   }
   provisioner "local-exec" {
-    command = <<'EOT'
-      set -euo pipefail
-      # Save the client's public cert to disk
-      echo "${client_pub_pem}" > client_pub.pem
-      # Encrypt API key to YubiKey's RSA key and Base64 encode the result
-      printf "%s" "${api_key}" | \
-        yubico-piv-tool -a encrypt -s 9c -K RSA2048 -i - -c client_pub.pem | \
-        base64 > wrapped_api_key.b64
-    EOT
+    # Ensure bash semantics
+    interpreter = ["/bin/bash", "-c"]
+
+    # Provide values safely via environment
     environment = {
       api_key        = random_password.api.result
       client_pub_pem = var.client_pub_pem
     }
+
+    # Unquoted heredoc + escape $ to pass shell vars through Terraform
+    command = <<-EOT
+      set -euo pipefail
+
+      # Save the client's public cert to disk
+      printf '%s\n' "$${client_pub_pem}" > client_pub.pem
+
+      # Encrypt API key to YubiKey's RSA key and Base64 encode the result
+      printf '%s' "$${api_key}" | \
+        yubico-piv-tool -a encrypt -s 9c -K RSA2048 -i - -c client_pub.pem | \
+        base64 > wrapped_api_key.b64
+    EOT
   }
 }
 
 # 5️⃣ Store the wrapped API key in Vault KV
 #    - Client retrieves this value and decrypts it locally with their YubiKey
 resource "vault_kv_secret_v2" "api_wrapped" {
-  mount     = "kv"
-  name      = "api/keys/${var.app_name}/wrapped"
+  mount = "kv"
+  name  = "api/keys/${var.app_name}/wrapped"
   data_json = jsonencode({
     wrapped_b64 = trimspace(file("${path.module}/wrapped_api_key.b64"))
   })

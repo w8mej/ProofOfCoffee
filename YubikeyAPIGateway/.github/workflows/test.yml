@@ -10,6 +10,15 @@ on:
     branches:
       - proof-of-concept   # Only run on PRs targeting this branch
 
+# ✅ Explicit least-privilege permissions for the whole workflow
+permissions:
+  contents: read         # checkout needs only read
+  pull-requests: read    # for PR metadata, if needed
+  # Add others ONLY if required:
+  # id-token: write      # <- enable if you use OIDC federated creds
+  # actions: read
+  # packages: read
+
 jobs:
   test:
     runs-on: ubuntu-latest # Use the latest Ubuntu GitHub Actions runner

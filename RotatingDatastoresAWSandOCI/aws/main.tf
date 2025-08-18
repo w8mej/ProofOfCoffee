@@ -25,8 +25,13 @@
 
 
 terraform {
-  required_providers { aws = { source = "hashicorp/aws" version = "~> 5.0" } }
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.0"
+    }
+  }
 }
 
-# AWS provider configuration – region/profile from environment
+# AWS provider configuration – region/profile picked up from env vars
 provider "aws" {}

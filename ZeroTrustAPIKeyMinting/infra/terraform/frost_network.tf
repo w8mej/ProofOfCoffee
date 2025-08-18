@@ -25,18 +25,18 @@
 
 # Three subnets across ADs for signer CVMs (private; no public IPs permitted)
 resource "oci_core_subnet" "frost_subnet" {
-  count                        = 3
-  cidr_block                   = cidrsubnet(oci_core_virtual_network.vcn.cidr_block, 8, count.index + 10)
-  compartment_id               = var.compartment_ocid
-  vcn_id                       = oci_core_virtual_network.vcn.id
-  display_name                 = "frost-subnet-${count.index + 1}"
-  prohibit_public_ip_on_vnic   = true                              # Private-only subnets
-  route_table_id               = oci_core_route_table.rt.id
-  security_list_ids            = [oci_core_security_list.frost_sl[count.index].id]
-  dns_label                    = "frost${count.index + 1}"
-  availability_domain          = data.oci_identity_availability_domains.ads.availability_domains[
-                                   count.index % length(data.oci_identity_availability_domains.ads.availability_domains)
-                                 ].name
+  count                      = 3
+  cidr_block                 = cidrsubnet(oci_core_virtual_network.vcn.cidr_block, 8, count.index + 10)
+  compartment_id             = var.compartment_ocid
+  vcn_id                     = oci_core_virtual_network.vcn.id
+  display_name               = "frost-subnet-${count.index + 1}"
+  prohibit_public_ip_on_vnic = true # Private-only subnets
+  route_table_id             = oci_core_route_table.rt.id
+  security_list_ids          = [oci_core_security_list.frost_sl[count.index].id]
+  dns_label                  = "frost${count.index + 1}"
+  availability_domain = data.oci_identity_availability_domains.ads.availability_domains[
+    count.index % length(data.oci_identity_availability_domains.ads.availability_domains)
+  ].name
 }
 
 # CIDR permitted to reach signer/keygen SSH & service ports.
@@ -71,10 +71,15 @@ resource "oci_core_security_list" "frost_sl" {
 
   # Allow egress to Oracle Services Network (via Service Gateway) for KMS, Object Storage, etc.
   egress_security_rules {
-    destination       = "all-iad-services-in-oracle-services-network"
-    destination_type  = "SERVICE_CIDR_BLOCK"
-    protocol          = "6"  # TCP
-    tcp_options { min = 443 max = 443 }
+    destination      = "all-iad-services-in-oracle-services-network"
+    destination_type = "SERVICE_CIDR_BLOCK"
+    protocol         = "6" # TCP
+
+    tcp_options {
+      min = 443
+      max = 443
+    }
+
     description = "Allow egress to OCI services via Service Gateway (KMS, Object Storage)"
   }
 
@@ -92,17 +97,27 @@ resource "oci_core_security_list" "frost_sl" {
 
   # RPC ports (Coordinator <-> Signers). Keep this narrow to specific coordinator CIDR(s) if possible.
   ingress_security_rules {
-    protocol    = "6"          # TCP
-    source      = var.allow_cidr
-    tcp_options { min = 7000 max = 7200 }
+    protocol = "6" # TCP
+    source   = var.allow_cidr
+
+    tcp_options {
+      min = 7000
+      max = 7200
+    }
+
     description = "Allow FROST signer/coordinator RPCs (7000–7200) from controlled CIDR"
   }
 
   # SSH: Break-glass/ops only, from controlled CIDR (never 0.0.0.0/0).
   ingress_security_rules {
-    protocol    = "6"
-    source      = var.allow_cidr
-    tcp_options { min = 22 max = 22 }
+    protocol = "6" # TCP
+    source   = var.allow_cidr
+
+    tcp_options {
+      min = 22
+      max = 22
+    }
+
     description = "Allow SSH from controlled CIDR (ops access)"
   }
 }

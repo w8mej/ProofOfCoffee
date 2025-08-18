@@ -11,14 +11,14 @@
 # -----------------------------------------------------------------------------
 
 variable "compartment_ocid" { type = string }
-variable "subnet_ocid"      { type = string }
-variable "display_name"     { type = string }
-variable "shape"            { type = string }
-variable "image_ocid"       { type = string }
+variable "subnet_ocid" { type = string }
+variable "display_name" { type = string }
+variable "shape" { type = string }
+variable "image_ocid" { type = string }
 
-variable "tee_policy_hash"  { type = string }
-variable "container_image"  { type = string }
-variable "service_port"     { type = number }
+variable "tee_policy_hash" { type = string }
+variable "container_image" { type = string }
+variable "service_port" { type = number }
 
 data "template_file" "cloud_init" {
   template = file("${path.module}/../templates/cloud_init.yaml")
@@ -35,8 +35,12 @@ resource "oci_core_instance" "svc" {
   shape               = var.shape
   display_name        = var.display_name
 
+  # ✅ Disable legacy IMDS (fixes CKV_OCI_5)
+  instance_options {
+    are_legacy_imds_endpoints_disabled = true
+  }
   create_vnic_details {
-    subnet_id = var.subnet_ocid
+    subnet_id        = var.subnet_ocid
     assign_public_ip = true
   }
 
