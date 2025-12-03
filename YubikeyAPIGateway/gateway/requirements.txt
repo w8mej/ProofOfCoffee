@@ -1,8 +1,0 @@
-# === API Framework ===
-fastapi==0.115.0     # Modern, high-performance web framework for building APIs in Python
-
-# === ASGI Server ===
-uvicorn==0.30.6      # Lightweight ASGI server to run FastAPI apps in production or dev
-
-# === Vault Client ===
-hvac==2.3.0          # Official HashiCorp Vault API client for Python (used for secret retrieval)

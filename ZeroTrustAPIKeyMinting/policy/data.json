@@ -1,9 +1,0 @@
-{
-  "kms": {
-    "pub_pem": "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqh...snip...\n-----END PUBLIC KEY-----\n",
-    "allowed_keys": ["ocid1.key.oc1..exampleuniqueid"],
-    "max_ttl_seconds": 3600,
-    "allowed_audiences": ["mint-api"],
-    "allowed_scopes": ["read:test", "write:test", "read:staging", "write:staging", "read:prod"]
-  }
-}
